@@ -1,2 +1,4 @@
-# smart_aquarium_filter
-DIY smart water regenerator for aquariums
+# DIY smart water regenerator for aquariums
+
+Arduino Client for MQTT
+https://github.com/knolleary/pubsubclient
