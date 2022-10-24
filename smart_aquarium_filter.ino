@@ -1,12 +1,12 @@
 /*
-
-
 */
 
 #include <ESP8266WiFi.h>
 #include <PubSubClient.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
+#include <Adafruit_NeoPixel.h>
+#include <Servo.h> 
 #include "settings.h"
 
 // WIFI values
@@ -14,11 +14,21 @@ WiFiClient espClient;
 PubSubClient client(espClient);
 
 // CONTROL parameters
-const int PinReleFilter = 2;
-const int PinReleCooler = 0;
+const int PinReleTmpCtrl = 2;
+const int PinFeeder = 14;
+const int PinReleFilter = 12;
+const int PinLevelSensor = 4;
+
+/* NEOPIXEL configuration*/
+#define PIN_STRIP_1 13
+#define NUMPIXELS_STRIP_1 9
+Adafruit_NeoPixel pixels_STRIP_1  = Adafruit_NeoPixel(NUMPIXELS_STRIP_1, PIN_STRIP_1, NEO_GRB + NEO_KHZ800);
 
 // MQTT configuration
 String mqttcommand = String(14);
+
+// Create a servo object 
+Servo ServoFeeder; 
 
 // TEMPERATURE SENSOR DS18B20
 // Data wire is plugged into pin D1 on the ESP8266 12-E - GPIO 5
@@ -34,6 +44,7 @@ char temperatureFString[7];
 long lastMsg = 0;
 char msg[50];
 int value = 0;
+int SensorState = 0;
 
 void setup_wifi() {
   delay(10);
@@ -55,6 +66,9 @@ void setup_wifi() {
   Serial.println("WiFi connected");
   Serial.println("IP address: ");
   Serial.println(WiFi.localIP());
+
+   // We need to attach the servo to the used pin number 
+  ServoFeeder.attach(PinFeeder); 
 }
 
 void callback(char* topic, byte* payload, unsigned int length) {
@@ -65,24 +79,50 @@ void callback(char* topic, byte* payload, unsigned int length) {
   for (int i = 0; i < length; i++) {
     mqttcommand += (char)payload[i];
   }
-  Serial.print(mqttcommand);
-  Serial.println();
+  Serial.println(mqttcommand);
+  Serial.println(mqttcommand.substring (0,6));
+  Serial.println(atoi(mqttcommand.substring (6,7).c_str()));
  
-  // Switch on the LED if an 1 was received as first character
+  // MQTT Command control  
   if (mqttcommand == "FilterOn") {
-    // but actually the LED is on; this is because
-    // it is acive low on the ESP-01)
     digitalWrite(PinReleFilter, LOW);
-    Serial.println("FilterOn");
+    Serial.println("Filter On");
   } else if (mqttcommand == "FilterOff"){
     digitalWrite(PinReleFilter, HIGH);
-    Serial.println("FilterOff");
-  } else if (mqttcommand == "CoolerOn"){
-    digitalWrite(PinReleCooler, LOW);
-    Serial.println("coolerOn");
-  } else if (mqttcommand == "CoolerOff"){
-    digitalWrite(PinReleCooler, HIGH);
-    Serial.println("CoolerOff");
+    Serial.println("Filter Off");
+  } else if (mqttcommand == "TmpCtrlOn"){
+    digitalWrite(PinReleTmpCtrl, LOW);
+    Serial.println("Heater On");
+  } else if (mqttcommand == "TmpCtrlOff"){
+    digitalWrite(PinReleTmpCtrl, HIGH);
+    Serial.println("Heater Off");
+  } else if (mqttcommand.substring (0,6) == "feeder"){
+    for (int i=0; i<atoi(mqttcommand.substring (6,7).c_str()); i++) {
+      Serial.println(i);
+      Serial.println("Feeder turn");
+      ServoFeeder.write(0);
+      delay (1000);
+      ServoFeeder.write(180);
+      delay (1000);
+    } 
+  } else if (mqttcommand == "LightOn") {
+      for(int i=0;i<NUMPIXELS_STRIP_1;i++){
+        pixels_STRIP_1.setPixelColor(i, pixels_STRIP_1.Color(255,255,255)); // high bright white color.
+        pixels_STRIP_1.show(); // This sends the updated pixel color to the hardware.
+      }
+    Serial.println("Lights On");
+  } else if (mqttcommand == "LightBlue") {
+      for(int i=0;i<NUMPIXELS_STRIP_1;i++){
+        pixels_STRIP_1.setPixelColor(i, pixels_STRIP_1.Color(0,0,255)); // high bright white color.
+        pixels_STRIP_1.show(); // This sends the updated pixel color to the hardware.
+      }
+    Serial.println("Lights On");
+  } else if (mqttcommand == "LightOff") {
+      for(int i=0;i<NUMPIXELS_STRIP_1;i++){
+        pixels_STRIP_1.setPixelColor(i, pixels_STRIP_1.Color(0,0,0)); // black color.
+        pixels_STRIP_1.show(); // This sends the updated pixel color to the hardware.
+      }
+    Serial.println("Lights Off");
   }
 }
 
@@ -123,9 +163,11 @@ void getTemperature() {
 
 void setup() {
   pinMode(PinReleFilter, OUTPUT);
-  pinMode(PinReleCooler, OUTPUT);  
+  pinMode(PinReleTmpCtrl, OUTPUT);
+  pinMode(PinLevelSensor, INPUT);
   digitalWrite(PinReleFilter, HIGH);
-  digitalWrite(PinReleCooler, HIGH);
+  digitalWrite(PinReleTmpCtrl , HIGH);
+  digitalWrite(PinLevelSensor, LOW);
   Serial.begin(115200);
   setup_wifi();
   client.setServer(mqtt_server, mqtt_port);
@@ -135,7 +177,15 @@ void setup() {
   Serial.println("Publish start-up temperature: ");
   Serial.println(temperatureCString);
   client.publish(mqtt_pub_topic_temperature, temperatureCString);
+
+  /* NEOPIXEL Initialization*/
+  pixels_STRIP_1.begin(); // This initializes the NeoPixel library. 
+  for(int i=0;i<NUMPIXELS_STRIP_1;i++){
+     pixels_STRIP_1.setPixelColor(i, pixels_STRIP_1.Color(0,0,0)); // black color.
+     pixels_STRIP_1.show(); // This sends the updated pixel color to the hardware.
+  }
 }
+
 
 void loop() {
   if (!client.connected()) {
@@ -146,9 +196,22 @@ void loop() {
   long now = millis();
   if (now - lastMsg > update_time) {
     lastMsg = now;
+    
+    // Water temperature sensor
     getTemperature();
     Serial.println("Publish temperature: ");
     Serial.println(temperatureCString);
     client.publish(mqtt_pub_topic_temperature, temperatureCString);
+
+    // Water level sensor
+    SensorState = digitalRead(PinLevelSensor);
+    if (SensorState == HIGH) {
+      Serial.println("Water lever Ok");
+      client.publish(mqtt_sub_topic_waterlevel, "ok");
+    } else {
+      Serial.println("Water lever LOW");
+      client.publish(mqtt_sub_topic_waterlevel, "low");
+    }
+    
   }
 }
